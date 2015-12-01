@@ -6,12 +6,14 @@ var webdriverio = require('webdriverio');
 var _ = require('lodash');
 var Guerrilla = require('guerrilla-api');
 var fs = require('fs');
+var os = require('os');
+var flatfile = require('flat-file-db');
 
 /**
  * Initialization
  * @constructor
  */
-function Match() {
+function Match(options) {
 
     var optionsWebdriver = {
         desiredCapabilities: {
@@ -19,9 +21,20 @@ function Match() {
         }
     };
 
-    this.client = webdriverio
-        .remote(optionsWebdriver)
-        .init();
+    if (typeof options == 'object') {
+        if (options.hasOwnProperty('socksProxy')) {
+            optionsWebdriver.desiredCapabilities.proxy = {
+                proxyType: 'manual',
+                socksProxy: options.socksProxy
+            };
+        }
+    }
+
+    if (!options.hasOwnProperty('webdriver_disable')) {
+        this.client = webdriverio
+            .remote(optionsWebdriver)
+            .init();
+    }
 
     // Util random string
     this.randomString = function (len, charSet) {
@@ -49,6 +62,7 @@ function Match() {
     this.prevSession = false;
     this.username = this.randomString(7);
     this.password = this.randomString(7);
+    this.refreshPage = false;
 }
 
 Match.prototype.randomRadio = function (selector, cb) {
@@ -70,7 +84,9 @@ Match.prototype.randomSelect = function(selector, cb) {
         else
             optionIndex = 1;
 
-        self.client.selectByIndex(selector, optionIndex);
+        self.client.selectByIndex(selector, optionIndex).then(function () {
+            if (cb) cb();
+        });
     });
 };
 
@@ -83,6 +99,19 @@ Match.prototype.waitText = function (selector, searchText, cb) {
             }
 
             return text[0] == searchText;
+        });
+    }, 10000);
+};
+
+/**
+ * Save account data
+ */
+Match.prototype.saveAccountData = function (data) {
+    var db = flatfile(__dirname +'/storage/account.txt', {fsync: true});
+
+    db.on('open', function() {
+        Object.keys(data).forEach(function (k, i) {
+            db.put(k, data[k]);
         });
     });
 };
@@ -104,7 +133,9 @@ Match.prototype.step1 = function (data) {
         .setValue('#my_birth_month', _.random(1, 12))
         .setValue('#my_birth_year', _.random(1980, 1983))
         .setValue('#my_pseudo', this.username)
-        .setValue('#my_password', this.password);
+        .setValue('#my_password', this.password).then(function () {
+            self.saveAccountData({username: self.username, password: self.password});
+        });
 
     // Get email and paste to form
     this.client.waitForExist('#my_email', 15000).then(function () {
@@ -112,6 +143,7 @@ Match.prototype.step1 = function (data) {
             if (!err) {
                 self.email = address;
                 self.client.setValue('#my_email', address);
+                self.saveAccountData({email: self.email});
             } else {
                 self.client.execute(function () {
                     alert('Ошибка получения email');
@@ -138,7 +170,7 @@ Match.prototype.step1 = function (data) {
  * Resumption previous session if enabled Match.prevSession = true
  * @param urlStep
  */
-Match.prototype.resumptionSession = function (urlStep) {
+Match.prototype.resumptionSession = function (urlStep, cb) {
     var self = this;
 
     // if enabled previous session
@@ -147,9 +179,20 @@ Match.prototype.resumptionSession = function (urlStep) {
             self.client.setCookie({name: cookiesData.name, value: encodeURIComponent(cookiesData.value)});
         });
 
-        this.client.url('http://www.matchaffinity.com').refresh().then(function () {
-            self.client.url(urlStep);
-        });
+        if (this.refreshPage) {
+            this.client.url(urlStep).then(function () {
+
+                if (cb) cb();
+            });
+        } else {
+            this.client.url('http://www.matchaffinity.com').refresh().then(function () {
+                self.client.url(urlStep).then(function () {
+                    self.refreshPage = true;
+
+                    if (cb) cb();
+                });
+            });
+        }
     }
 };
 
@@ -224,9 +267,9 @@ Match.prototype.step3 = function () {
             if (text[0] == 'The man I am looking for should be:') {
                 self.client.elements('input[name=TYSOCIOTESTYT_LI106IL_QTRTQ]').then(function (elems) {
                     self.client.elementIdClick(elems.value[_.random(0, elems.value.length - 1)].ELEMENT).then(function () {
-                        self.client.click('#ultButton');
-
-                        self.step4();
+                        self.client.click('#ultButton').then(function () {
+                            self.step4();
+                        });
                     });
                 });
             }
@@ -263,13 +306,15 @@ Match.prototype.step4 = function () {
                 self.randomRadio('input[name=TYSELFTESTYT_LI44IL_QTG51TQ]');
                 self.randomRadio('input[name=TYSELFTESTYT_LI13IL_QTG51TQ]');
                 self.randomRadio('input[name=TYSELFTESTYT_LI24IL_QTG51TQ]', function () {
-                    self.client.click('#ultButton');
-
-                    self.step5();
+                    self.client.pause(2000).then(function () {
+                        self.client.click('#ultButton').then(function () {
+                            self.step5();
+                        });
+                    });
                 });
             }
 
-            return text[0] == 'The man I am looking for should be:';
+            return text[0] == 'I\'d like to meet someone who is:';
         });
     });
 };
@@ -605,8 +650,275 @@ Match.prototype.step19 = function () {
     });
 };
 
+/**
+ * Step 20
+ */
 Match.prototype.step20 = function () {
+    var self = this;
 
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=19');
+
+    this.waitText('.ultTxt2', 'My top holiday destinations would be (choose up to three options):', function () {
+        self.randomRadio('input[name="TYSELFTESTYT_LI93IL_QTQTQ[]"]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step21();
+            });
+        });
+
+    });
+};
+
+/**
+ * Step 21
+ */
+Match.prototype.step21 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=20');
+
+    this.waitText('.ultTxt2', 'My favorite hobbies (3 choices possible)', function () {
+        self.randomRadio('input[name="styl_hobbies[]"]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step22();
+            });
+        });
+
+    });
+};
+
+/**
+ * Step 22
+ */
+Match.prototype.step22 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=21');
+
+    this.waitText('.ultTxt2', 'My favourite animals (choose up to three options)', function () {
+        self.randomRadio('input[name="styl_pet[]"]');
+        self.randomRadio('input[name="styl_sorties[]"]');
+        self.randomRadio('input[name="styl_sports[]"]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step23();
+            });
+        });
+    });
+};
+
+/**
+ * Step 23
+ */
+Match.prototype.step23 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=22');
+
+    this.waitText('.ultTxt2', 'The artistic style I most admire is:', function () {
+        self.randomRadio('input[name=TYSELFTESTYT_LI38IL_QTMTQ]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step24();
+            });
+        });
+    });
+};
+
+/**
+ * Step 24
+ */
+Match.prototype.step24 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=23');
+
+    this.waitText('.ultTxt2', 'My kind of music is (choose up to three options)', function () {
+        self.randomRadio('input[name="TYSOCIOTESTYT_LI95IL_QTQTQ[]"]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step25();
+            });
+        });
+    });
+};
+
+/**
+ * Step 25
+ */
+Match.prototype.step25 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=24');
+
+    this.waitText('.ultTxt2', 'The films I enjoy are usually (choose up to three options):', function () {
+        self.randomRadio('input[name="TYSOCIOTESTYT_LI96IL_QTQTQ[]"]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step26();
+            });
+        });
+    });
+};
+
+/**
+ * Step 26
+ */
+Match.prototype.step26 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=25');
+
+    this.waitText('.ultTxt2', 'I\'m ready for a long-term relationship:', function () {
+
+        self.randomRadio('input[name=TYSELFTESTYT_LI74IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI73IL_QTG31TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI77IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI78IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI81IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI79IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI82IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI80IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI87IL_QTG41TQ]');
+        self.randomRadio('input[name=TYSELFTESTYT_LI89IL_QTG41TQ]', function () {
+            self.client.click('#ultButton').then(function () {
+                self.step27();
+            });
+        });
+    });
+};
+
+/**
+ * Step 27
+ */
+Match.prototype.step27 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/test_new.php?page=26');
+
+    this.waitText('.ultBlocLeft', 'My religion:', function () {
+
+        self.randomSelect('select[name=my_religion]', function () {
+            self.randomSelect('select[name=my_religion_behaviour]', function () {
+                self.randomSelect('select[name=styl_foodhabit]', function () {
+                    self.randomSelect('select[name=prof_alcohol]', function () {
+                        self.randomSelect('select[name=prof_fumeur]', function () {
+                            self.randomSelect('select[name=prof_ethnie]', function () {
+                                self.randomSelect('select[name=prof_nationalite]', function () {
+                                    self.randomSelect('#prof_langues1', function () {
+                                        self.randomSelect('#prof_langues2', function () {
+                                            self.client.setValue('#prof_cat_prof', 'Biologist').then(function () {
+                                                self.randomSelect('select[name=prof_statut]', function () {
+                                                    self.randomSelect('select[name=prof_enfants]', function () {
+                                                        self.randomSelect('select[name=prof_enf_souhait]', function () {
+                                                            self.randomSelect('select[name=prof_etudes]', function () {
+                                                                self.randomSelect('select[name=prof_revenus]', function () {
+                                                                    self.randomSelect('select[name=prof_taille]', function () {
+                                                                        self.randomSelect('select[name=prof_poids]', function () {
+                                                                            self.randomSelect('select[name=prof_silhouette]', function () {
+                                                                                self.randomSelect('select[name=prof_cheveux]', function () {
+                                                                                    self.randomSelect('select[name=description_stylecheveux]', function () {
+                                                                                        self.randomSelect('select[name=prof_yeux]', function () {
+                                                                                            self.client.click('#ultButton').then(function () {
+                                                                                                self.step28();
+                                                                                            });
+                                                                                        });
+                                                                                    });
+                                                                                });
+                                                                            });
+                                                                        });
+                                                                    });
+                                                                });
+                                                            });
+                                                        });
+                                                    });
+                                                });
+                                            });
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        });
+
+    });
+};
+
+/**
+ * Step 28
+ */
+Match.prototype.step28 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/photo.php');
+
+    this.waitText('.ultTxt2', 'Your profile photo', function () {
+        self.step29();
+    });
+};
+
+
+/**
+ * Step 29
+ */
+Match.prototype.step29 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/signup/announce.php');
+
+    this.waitText('.ultTxt2', 'Your personal ad:', function () {
+
+        self.client.setValue('#un', 'I love you').then(function () {
+            self.client.click('.ultLayerButtonSendGreen').then(function () {
+                self.step30();
+            });
+        });
+    });
+};
+
+/**
+ * Step 30
+ */
+Match.prototype.step30 = function () {
+    var self = this;
+
+    // Option previous a session
+    this.resumptionSession('http://www.matchaffinity.com/home/index.php');
+
+    this.waitText('.i-btn-20', 'View your selection of matches', function () {
+        self.client.click('.i-btn-20').then(function () {
+            setTimeout(function () {
+                self.step30();
+            }, 10000);
+        });
+    });
+};
+
+/**
+ * Step 31
+ */
+Match.prototype.step31 = function () {
+    this.guerrillaApi.checkEmail(function (err, emails) {
+        if (err) {
+            console.log('Not messages to email'
+                + err);
+        } else {
+            emails.forEach(function(email) {
+                console.log(email.mail_from +
+                    ' sent me an e-mail with the following subject: '
+                    + mail.mail_subject);
+                console.log(email);
+            });
+        }
+    });
 };
 
 module.exports = Match;
