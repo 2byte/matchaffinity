@@ -1,0 +1,3 @@
+@echo check email...
+node work.js check_email
+@pause
