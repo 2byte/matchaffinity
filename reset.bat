@@ -1,0 +1,3 @@
+@echo Reset...
+node work.js reset
+@pause
