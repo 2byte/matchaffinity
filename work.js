@@ -1,8 +1,9 @@
 var webdriverio = require('webdriverio');
 var match = require('./match');
-var Guerrilla = require('guerrilla-api');
 var fs = require('fs');
 var flatfile = require('flat-file-db');
+var request = require('request');
+var tempmail = require('tempmail.js');
 
 switch (process.argv[2]) {
 
@@ -13,22 +14,34 @@ switch (process.argv[2]) {
     break;
 
     case 'check_email':
-        var Match = new match({webdriver_disable: true});
+        var Match = new match();
+
+        Match.prevSession = true;
 
         Match.step31();
     break;
 
+    case 'test':
+        var account = new tempmail('539c3ef175409886302dd15c62a6147b@yhg.biz');
+
+        console.log(account.address);
+
+        account.getMail(function (messages) {
+            if (messages.length) {
+                console.log('Mail is found');
+
+                var getLink = messages[0].text_only.match(/(https\:\/\/tk\d*\.info\.lnkml\.com\/r\/\?id.[^"]+)/g);
+
+                console.log(getLink);
+            } else {
+                console.log('Empty');
+            }
+        });
+    break;
+
     default:
-        // {socksProxy: '31.16.253.224:40362'}
         var Match = new match();
-        //Match.client.url('http://2ip.ru');
-        Match.prevSession = true;
+        //Match.prevSession = true;
 
-        Match.step28();
-
-        /*var db = flatfile(__dirname +'/storage/account.txt');
-
-        db.on('open', function() {
-            fs.writeFileSync(__dirname + '/storage/data.txt', db.get('email') +'|'+ db.get('password'));
-        });*/
+        Match.step1();
 }

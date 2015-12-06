@@ -4,27 +4,40 @@
 
 var webdriverio = require('webdriverio');
 var _ = require('lodash');
-var Guerrilla = require('guerrilla-api');
 var fs = require('fs');
 var os = require('os');
 var flatfile = require('flat-file-db');
+var tempmail = require('tempmail.js');
 
 /**
  * Initialization
  * @constructor
  */
 function Match(options) {
+    options = options || {};
 
     var optionsWebdriver = {
         desiredCapabilities: {
-            browserName: 'chrome'
+            browserName: 'chrome',
+            chromeOptions: {
+                args: [
+                    'lang=en'
+                ]
+            }
         }
     };
+
+    // Set proxy
+    var proxy = fs.readFileSync(__dirname +'/storage/proxy.txt').toString();
+
+    if (proxy != '') {
+        optionsWebdriver.desiredCapabilities.chromeOptions.args.push('proxy-server=socks5://'+ proxy);
+    }
 
     if (typeof options == 'object') {
         if (options.hasOwnProperty('socksProxy')) {
             optionsWebdriver.desiredCapabilities.proxy = {
-                proxyType: 'manual',
+                proxyType: 'MANUAL',
                 socksProxy: options.socksProxy
             };
         }
@@ -57,8 +70,11 @@ function Match(options) {
         return JSON.parse(fs.readFileSync(__dirname + '/storage/cookie.json').toString());
     };
 
-    this.guerrillaApi = new Guerrilla('127.0.0.1', 'automated-test-agent');
-    this.email;
+    // Create email address
+    this.tempmail = new tempmail();
+    this.saveTempmail(this.tempmail.address);
+
+    this.email = this.tempmail.address;
     this.prevSession = false;
     this.username = this.randomString(7);
     this.password = this.randomString(7);
@@ -117,6 +133,53 @@ Match.prototype.saveAccountData = function (data) {
 };
 
 /**
+ * Save cookies for guearilla api
+ * @param cookies
+ */
+Match.prototype.saveTempmail = function (email) {
+    var db = flatfile(__dirname +'/storage/tempmail.txt', {fsync: true});
+
+    db.on('open', function () {
+        db.put('email', email);
+    });
+};
+
+/**
+ * Resumption previous session if enabled Match.prevSession = true
+ * @param urlStep
+ */
+Match.prototype.resumptionSession = function (urlStep, cb) {
+    var self = this;
+
+    if (typeof urlStep == 'function')
+        cb = urlStep;
+
+    // if enabled previous session
+    if (this.prevSession) {
+        this.getCookie().forEach(function (cookiesData) {
+            self.client.setCookie({name: cookiesData.name, value: encodeURIComponent(cookiesData.value)});
+        });
+
+        if (this.refreshPage) {
+            this.client.url(urlStep).then(function () {
+
+                if (cb) cb();
+            });
+        } else {
+            this.client.url('http://www.matchaffinity.com').refresh().then(function () {
+                if (urlStep) {
+                    self.client.url(urlStep).then(function () {
+                        self.refreshPage = true;
+
+                        if (cb) cb();
+                    });
+                }
+            });
+        }
+    }
+};
+
+/**
  * Step 1
  * @param data
  */
@@ -139,17 +202,8 @@ Match.prototype.step1 = function (data) {
 
     // Get email and paste to form
     this.client.waitForExist('#my_email', 15000).then(function () {
-        self.guerrillaApi.setEmailAddress(self.randomString(10), function (err, address) {
-            if (!err) {
-                self.email = address;
-                self.client.setValue('#my_email', address);
-                self.saveAccountData({email: self.email});
-            } else {
-                self.client.execute(function () {
-                    alert('Ошибка получения email');
-                });
-            }
-        });
+        self.client.setValue('#my_email', self.email);
+        self.saveAccountData({email: self.email});
     });
 
     this.client.waitForExist('#my_cgu', 15000).then(function () {
@@ -157,6 +211,9 @@ Match.prototype.step1 = function (data) {
     });
 
     this.client.waitForExist('#formSignup', 60000 * 5).then(function () {
+        // Save normal data
+        fs.writeFile(__dirname + '/storage/data.txt', self.username +'|'+ self.password +'|'+ self.email);
+
         // Save cookie
         self.client.getCookie().then(function (cookies) {
             self.saveCookie(cookies);
@@ -164,36 +221,6 @@ Match.prototype.step1 = function (data) {
 
         self.step2();
     });
-};
-
-/**
- * Resumption previous session if enabled Match.prevSession = true
- * @param urlStep
- */
-Match.prototype.resumptionSession = function (urlStep, cb) {
-    var self = this;
-
-    // if enabled previous session
-    if (this.prevSession) {
-        this.getCookie().forEach(function (cookiesData) {
-            self.client.setCookie({name: cookiesData.name, value: encodeURIComponent(cookiesData.value)});
-        });
-
-        if (this.refreshPage) {
-            this.client.url(urlStep).then(function () {
-
-                if (cb) cb();
-            });
-        } else {
-            this.client.url('http://www.matchaffinity.com').refresh().then(function () {
-                self.client.url(urlStep).then(function () {
-                    self.refreshPage = true;
-
-                    if (cb) cb();
-                });
-            });
-        }
-    }
 };
 
 /**
@@ -859,9 +886,11 @@ Match.prototype.step28 = function () {
     // Option previous a session
     this.resumptionSession('http://www.matchaffinity.com/signup/photo.php');
 
-    this.waitText('.ultTxt2', 'Your profile photo', function () {
+    self.client.waitForExist('.ultTxt2', 20*1000).then(function () {
+        self.client.url('http://www.matchaffinity.com/signup/announce.php');
         self.step29();
     });
+
 };
 
 
@@ -873,6 +902,10 @@ Match.prototype.step29 = function () {
 
     // Option previous a session
     this.resumptionSession('http://www.matchaffinity.com/signup/announce.php');
+
+    if (!this.prevSession) {
+        this.client.url('http://www.matchaffinity.com/signup/announce.php');
+    }
 
     this.waitText('.ultTxt2', 'Your personal ad:', function () {
 
@@ -895,9 +928,7 @@ Match.prototype.step30 = function () {
 
     this.waitText('.i-btn-20', 'View your selection of matches', function () {
         self.client.click('.i-btn-20').then(function () {
-            setTimeout(function () {
-                self.step30();
-            }, 10000);
+            console.log('Profile is registred, run verfymail.bat!');
         });
     });
 };
@@ -905,19 +936,41 @@ Match.prototype.step30 = function () {
 /**
  * Step 31
  */
-Match.prototype.step31 = function () {
-    this.guerrillaApi.checkEmail(function (err, emails) {
-        if (err) {
-            console.log('Not messages to email'
-                + err);
-        } else {
-            emails.forEach(function(email) {
-                console.log(email.mail_from +
-                    ' sent me an e-mail with the following subject: '
-                    + mail.mail_subject);
-                console.log(email);
-            });
-        }
+Match.prototype.step31 = function (email) {
+    var self = this;
+
+    this.resumptionSession('http://www.matchaffinity.com/home/index.php', function () {
+        var db = flatfile(__dirname +'/storage/account.txt', {fsync: true});
+
+        db.on('open', function() {
+            var email = db.get('email');
+
+            if (email) {
+                var account = new tempmail(email);
+
+                console.log(account.address);
+
+                account.getMail(function (messages) {
+                    if (messages.length) {
+                        console.log('Messages a mail is found');
+
+                        var getLink = messages[0].text_only.match(/(https\:\/\/tk\d*\.info\.lnkml\.com\/r\/\?id.[^"]+)/g);
+
+                        self.client.url(getLink[2]).then(function () {
+                            self.client.setValue('#log', email);
+                            self.client.setValue('#pwd_affich', db.get('password')).then(function () {
+                                self.client.click('.i-btn-13');
+                            });
+                        });
+                    } else {
+                        console.log('Email is empty');
+                        self.client.close();
+                    }
+                });
+            } else {
+                console.log('Email not found');
+            }
+        });
     });
 };
 
