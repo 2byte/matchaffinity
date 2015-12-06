@@ -1,0 +1,3 @@
+@echo running test...
+node work.js test
+@pause
