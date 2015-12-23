@@ -22,7 +22,7 @@ switch (process.argv[2]) {
     break;
 
     case 'test':
-        var account = new tempmail('ffad7040111f8dd2bd4e6051130d7a23@yhg.biz');
+        var account = new tempmail('bgzlcv@yhg.biz');
 
         console.log(account.address);
 

@@ -71,7 +71,7 @@ function Match(options) {
     };
 
     // Create email address
-    this.tempmail = new tempmail();
+    this.tempmail = new tempmail(this.randomString(_.random(5, 8)) + '@yhg.biz');
     this.saveTempmail(this.tempmail.address);
 
     this.email = this.tempmail.address;
